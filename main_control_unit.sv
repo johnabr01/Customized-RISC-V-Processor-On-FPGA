@@ -35,7 +35,11 @@ module main_control_unit(input [6:0] opcode,
 			output logic RegWrite,
 			output logic [1:0] MemReadSize,
 			output logic MemReadSigned,
-			output logic Sel_imm	
+			output logic Sel_imm,
+			output logic Jal,
+			output logic JalR,
+			output logic AuiPc,
+			output logic Lui
 			);
 
 	//logic funct6 = funct7[6:1]; //6 most significang bits for immediate-type instructions
@@ -56,6 +60,10 @@ module main_control_unit(input [6:0] opcode,
 		MemReadSigned = 1'bx;
 		MemReadSize = 2'bx;
 		Sel_imm = 1'bx;
+		Jal = 1'bx;
+		JalR = 1'bx;
+		AuiPc = 1'bx;
+		Lui = 1'bx;
 
 		case(opcode)
 			//Load from memory instruction 
@@ -69,6 +77,10 @@ module main_control_unit(input [6:0] opcode,
 				ALUSrc = 1; //Use 32-bit immediate
 				RegWrite = 1; //Write loaded memory data into register file
 				Sel_imm = 0;
+				Jal = 0;
+				JalR = 0;
+				AuiPc = 0;
+				Lui = 0;
 				case(funct3)
 					//0 : LB
 					3'b000:
@@ -112,6 +124,10 @@ module main_control_unit(input [6:0] opcode,
 				ALUSrc = 1; //Use 32-bit immediate to add to base address
 				RegWrite = 0; //Don't write anything to register file
 				Sel_imm = 1; //select the store immediate
+				Jal = 0;
+				JalR = 0;
+				AuiPc = 0;
+				Lui = 0;
 				case(funct3)
 					//0 : SB
 					3'b000:
@@ -142,6 +158,10 @@ module main_control_unit(input [6:0] opcode,
 				ALUSrc = 0; //Don't use an immediate (use the values specified in the registers)
 				RegWrite = 0; //Don't write anything to register file
 				Sel_imm = 0;
+				Jal = 0;
+				JalR = 0;
+				AuiPc = 0;
+				Lui = 0;
 				case(funct3)
 					//0: beq
 					3'b000:
@@ -192,6 +212,10 @@ module main_control_unit(input [6:0] opcode,
 				ALUSrc = 0; //Use the value specified in the register (R-type)
 				RegWrite = 1; //Write to the register file
 				Sel_imm = 0;
+				Jal = 0;
+				JalR = 0;
+				AuiPc = 0;
+				Lui = 0;
 				case(funct3)
 					//0 : Add or Subtract
 					3'b000:
@@ -256,7 +280,7 @@ module main_control_unit(input [6:0] opcode,
 					end
 				endcase
 			end
-			//I-type instructions (not including jalr or memory
+			//I-type instructions (not including jalr or memory)
 			//instructions)
 			7'b0010011 :
 			begin
@@ -268,6 +292,10 @@ module main_control_unit(input [6:0] opcode,
 				ALUSrc = 1; //Use the value specified in the immediate (I-type)
 				RegWrite = 1; //Write to the register file
 				Sel_imm = 0;
+				Jal = 0;
+				JalR = 0;
+				AuiPc = 0;
+				Lui = 0;
 				case(funct3)
 					//0 : Add
 					3'b000: ALUOp = ADD; //Add ALU Function
@@ -298,6 +326,68 @@ module main_control_unit(input [6:0] opcode,
 					3'b111 : ALUOp = AND;
 				endcase
 			end
+			//jump and link (jal)
+			7'b1101111 : begin
+				Branch = 0;
+				MemRead = 0; //Don't read from memory
+				MemtoReg = 0; //Don't consider writing from memory
+				ALUOp = ADD; //Default ALU operation
+				MemWrite = 4'b0; //Don't write to memory
+				ALUSrc = 0; //Use the value specified in the register (R-type)
+				RegWrite = 1; //Write to the register file
+				Sel_imm = 0;
+				Jal = 1;
+				JalR = 0;
+				AuiPc = 0;
+				Lui = 0;
+			end
+			//jump and link register (jalr)
+			7'b1100111 : begin
+				Branch = 0;
+				MemRead = 0; //Don't read from memory
+				MemtoReg = 0; //Don't consider writing from memory
+				ALUOp = ADD; //Default to ADD operation
+				MemWrite = 4'b0; //Don't write to memory
+				ALUSrc = 1; //Use the value specified in the immediate (I-type)
+				RegWrite = 1; //Write to the register file
+				Sel_imm = 0;
+				Jal = 1;
+				JalR = 1;
+				AuiPc = 0;
+				Lui = 0;
+			end
+
+			//load upper immediate (lui)
+			7'b0110111 : begin
+				Branch = 0;
+				MemRead = 0; //Don't read from memory
+				MemtoReg = 0; //Don't consider writing from memory
+				ALUOp = ADD; //Default to ADD operation
+				MemWrite = 4'b0; //Don't write to memory
+				ALUSrc = 1; //Use the value specified in the immediate (I-type)
+				RegWrite = 1; //Write to the register file
+				Sel_imm = 0;
+				Jal = 0;
+				JalR = 0;
+				AuiPc = 0;
+				Lui = 1;   
+			end	
+				//AUIPC
+			7'b0010111 : begin
+				Branch = 0;
+				MemRead = 0; //Don't read from memory
+				MemtoReg = 0; //Don't consider writing from memory
+				ALUOp = ADD; //Default to ADD operation
+				MemWrite = 4'b0; //Don't write to memory
+				ALUSrc = 1; //Use the value specified in the immediate (I-type)
+				RegWrite = 1; //Write to the register file
+				Sel_imm = 0;
+				Jal = 0;
+				JalR = 0;
+				AuiPc = 1;	
+				Lui = 0;
+			end
+
 		endcase
 		
 	end

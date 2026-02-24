@@ -16,11 +16,11 @@ module alu(input [31:0] alu_in1,
     input branch,
     input [2:0] branch_type,
 	output logic[31:0] alu_out,
-	output logic sel_branch
+	output logic pc_src
 	);
 
 	always_comb begin	 
-		sel_branch = 0; //default value to prevent inferred latch
+		pc_src = 0; //default value to prevent inferred latch
 		
         unique case (alu_op_ctrl)	//unique case will give us a warning if mulitple cases could match.
             alu_op_pkg::ADD: alu_out = alu_in1 + alu_in2;                       // ADD
@@ -42,34 +42,34 @@ module alu(input [31:0] alu_in1,
                 //0: beq
                 3'b000:
                 begin
-                    if (alu_in1 == alu_in2) sel_branch = 1;
+                    if (alu_in1 == alu_in2) pc_src = 1;
                 end
                 //1: bne
                 3'b001:
                 begin
-                    if (alu_in1 != alu_in2) sel_branch = 1;
+                    if (alu_in1 != alu_in2) pc_src = 1;
                 end
                 //4: blt
                 3'b100:
                 begin
-                    if (alu_in1 < alu_in2) sel_branch = 1;
+                    if ($signed(alu_in1) < $signed(alu_in2)) pc_src = 1;
                 end
                 //5: bge
                 3'b101:
                 begin
-                    if (alu_in1 >= alu_in2) sel_branch = 1;
+                    if ($signed(alu_in1) >= $signed(alu_in2)) pc_src = 1;
                 end
                 //6: bltu
                 3'b110:
                 begin
-                    if ($unsigned(alu_in1) < $unsigned(alu_in2)) sel_branch = 1;
+                    if ($unsigned(alu_in1) < $unsigned(alu_in2)) pc_src = 1;
                 end
                 //7: bgeu
                 3'b111:
                 begin
-                    if ($unsigned(alu_in1) >= $unsigned(alu_in2)) sel_branch = 1;
+                    if ($unsigned(alu_in1) >= $unsigned(alu_in2)) pc_src = 1;
                 end
-                default: sel_branch = 0;
+                default: pc_src = 0;
             endcase
         end
     end
