@@ -3,114 +3,80 @@ module riscv_processor (
     input logic reset_n
 );
 
-    // Internal signals
+    // ========================= IF stage =========================
     logic [31:0] pc_current, pc_next, pc_plus_4;
     logic [31:0] instruction;
-    logic [31:0] imm_extended;
-    logic [31:0] reg_write_data, reg_read_data1, reg_read_data2;
-    logic [31:0] alu_input2, alu_result;
-    logic [31:0] mem_read_data;
-    logic alu_zero;
-    
-    // Control signals
-    logic Branch, MemRead, MemtoReg, ALUSrc, RegWrite;
-    logic [1:0] MemReadSize;
-    logic [3:0] MemWrite;
-    logic MemReadSigned;
-    logic Sel_imm;
-    logic Jal;
-	logic JalR;
-	logic AuiPc;
-	logic Lui;
-    alu_op_pkg::alu_op_t ALUOp;
-    
-    // Instruction fields
+    logic        pc_write;
+
+    // ========================= ID stage =========================
+    logic [31:0] instruction_ID, pc_ID;
     logic [6:0] opcode;
     logic [4:0] rd, rs1, rs2;
     logic [2:0] funct3;
     logic [6:0] funct7;
-    logic [11:0] imm_12bit;
-    logic [4:0] shamt;
-    
-    // Branch control
+
+    logic Branch, MemRead_ID, MemtoReg_ID, ALUSrc_ID, RegWrite_ID;
+    logic [1:0] MemReadSize_ID;
+    logic [3:0] MemWrite_ID;
+    logic MemReadSigned_ID;
+    logic Sel_imm;
+    logic Jal_ID, Jalr_ID, AuiPc_ID, Lui_ID;
     logic [2:0] BranchType;
     logic BranchSigned;
-    logic pc_src;
+    alu_op_pkg::alu_op_t ALUOp_ID;
 
+    logic [31:0] reg_write_data, reg_read_data1_ID, reg_read_data2_ID;
+    logic [31:0] imm_extended_ID;
+    logic [19:0] auipc_or_lui_addr_ID;
+    logic [4:0] shamt_ID;
 
-    // ============================================================
-// IF/ID Stage Signals
-// ============================================================
-logic [31:0] instruction_ID;
+    logic if_id_enable, if_id_flush;
 
-// ============================================================
-// ID/EX Stage Signals
-// ============================================================
-// Control
-logic        MemRead_ID,      MemRead_EX;
-logic        MemtoReg_ID,     MemtoReg_EX;
-alu_op_pkg::alu_op_t  ALUOp_ID,        ALUOp_EX;
-logic [3:0]  MemWrite_ID,     MemWrite_EX;
-logic        ALUSrc_ID,       ALUSrc_EX;
-logic        RegWrite_ID,     RegWrite_EX;
-logic        MemReadSigned_ID, MemReadSigned_EX;
-logic [1:0]  MemReadSize_ID,  MemReadSize_EX;
-logic        Jal_ID,          Jal_EX;
-logic        Jalr_ID,         Jalr_EX;
-logic        AuiPc_ID,        auipc_EX;
-logic        Lui_ID,          lui_EX;
-logic [4:0]  shamt_ID,        shamt_EX;
+    // ========================= EX stage =========================
+    logic Branch_EX, MemRead_EX, MemtoReg_EX, ALUSrc_EX, RegWrite_EX;
+    logic [2:0] BranchType_EX;
+    logic [1:0] MemReadSize_EX;
+    logic [3:0] MemWrite_EX;
+    logic MemReadSigned_EX;
+    logic Jal_EX, Jalr_EX, auipc_EX, lui_EX;
+    logic [4:0] shamt_EX, rs1_EX, rs2_EX, reg_write_addr_EX;
+    logic [31:0] reg_read_data1_EX, reg_read_data2_EX, imm_extended_EX, pc_EX;
+    logic [19:0] auipc_or_lui_addr_EX;
+    alu_op_pkg::alu_op_t ALUOp_EX;
 
-// Data
-logic [31:0] reg_read_data1_ID,     reg_read_data1_EX;
-logic [31:0] reg_read_data2_ID,     reg_read_data2_EX;
-logic [4:0]  reg_write_addr_ID,     reg_write_addr_EX;
-logic [31:0] imm_extended_ID,       imm_extended_EX;
-logic [19:0] auipc_or_lui_addr_ID,  auipc_or_lui_addr_EX;
+    logic [31:0] forward_a_EX, forward_b_EX;
+    logic [31:0] alu_input2, alu_result_raw_EX, alu_result_EX;
+    logic [31:0] branch_jump_target_EX;
+    logic branch_taken_EX, control_redirect_EX;
+    logic id_ex_flush;
 
-// ============================================================
-// EX/MEM Stage Signals
-// ============================================================
-// Control
-logic        MemtoReg_MEM;
-logic [3:0]  MemWrite_MEM;
-logic        RegWrite_MEM;
-logic        MemReadSigned_MEM;
-logic [1:0]  MemReadSize_MEM;
-logic        Jal_MEM;
-logic        auipc_MEM;
-logic        lui_MEM;
+    // ========================= MEM stage =========================
+    logic MemtoReg_MEM, RegWrite_MEM, MemReadSigned_MEM, Jal_MEM, auipc_MEM, lui_MEM;
+    logic [1:0] MemReadSize_MEM;
+    logic [3:0] MemWrite_MEM;
+    logic [31:0] alu_result_MEM, reg_read_data2_MEM, mem_read_data_MEM, reg_write_data_MEM;
+    logic [4:0] reg_write_addr_MEM;
+    logic [19:0] auipc_or_lui_addr_MEM;
 
-// Data
-logic [31:0] alu_result_EX,         alu_result_MEM;
-logic [31:0] reg_read_data2_MEM;
-logic [4:0]  reg_write_addr_MEM;
-logic [19:0] auipc_or_lui_addr_MEM;
+    // ========================= WB stage =========================
+    logic MemtoReg_WB, RegWrite_WB, MemReadSigned_WB;
+    logic [1:0] MemReadSize_WB;
+    logic [31:0] alu_result_WB, mem_read_data_WB, reg_write_data_WB;
+    logic [4:0] reg_write_addr_WB;
 
-// ============================================================
-// MEM/WB Stage Signals
-// ============================================================
-// Control
-logic        MemtoReg_WB;
-logic        RegWrite_WB;
-logic        MemReadSigned_WB;
-logic [1:0]  MemReadSize_WB;
-
-// Data
-logic [31:0] alu_result_WB;
-logic [31:0] mem_read_data_MEM,     mem_read_data_WB;
-logic [31:0] reg_write_data_MEM,    reg_write_data_WB;
-logic [4:0]  reg_write_addr_WB;
+    // Hazard detection helpers
+    logic is_branch_or_jalr_ID;
+    logic control_stall;
 
     // ========== Program Counter ==========
     program_counter pc_inst (
         .clk(clk),
         .reset_n(reset_n),
+        .pc_write(pc_write),
         .pc_next(pc_next),
         .pc(pc_current)
     );
 
-    // PC + 4 adder
     adder #(.WIDTH(32)) pc_adder (
         .in0(pc_current),
         .in1(32'd4),
@@ -119,37 +85,37 @@ logic [4:0]  reg_write_addr_WB;
 
     // ========== Instruction Memory ==========
     instruction_memory #(
-        .ADDR_WIDTH(10),  // 1024 instructions
+        .ADDR_WIDTH(10),
         .DATA_WIDTH(32)
     ) instr_mem (
         .clk(clk),
-        .we(1'b0),                      // not writing to instruction memory for now
-        .addr(pc_current[11:2]),        // mem addr is only 10 bits & Word-aligned access (divide by 4), i.e., the last two bits are always zero so we discard them
-        .write_data(32'b0),             // Not used
+        .we(1'b0),
+        .addr(pc_current[11:2]),
+        .write_data(32'b0),
         .read_data(instruction)
     );
 
-    IF_ID_reg #(
-        .DATA_WIDTH(32)
-    ) if_id_reg_inst (
+    IF_ID_reg #(.DATA_WIDTH(32)) if_id_reg_inst (
         .clk(clk),
         .rst_n(reset_n),
+        .enable(if_id_enable),
+        .flush(if_id_flush),
         .instruction(instruction),
-        .instruction_out(instruction_ID)
+        .pc(pc_current),
+        .instruction_out(instruction_ID),
+        .pc_out(pc_ID)
     );
 
-    // ========== Instruction Decoding ==========
+    // ========== Instruction Decode ==========
     assign opcode = instruction_ID[6:0];
-    assign reg_write_addr_ID = instruction_ID[11:7];
+    assign rd = instruction_ID[11:7];
     assign funct3 = instruction_ID[14:12];
     assign rs1 = instruction_ID[19:15];
     assign rs2 = instruction_ID[24:20];
     assign funct7 = instruction_ID[31:25];
-    assign imm_12bit = instruction_ID[31:20]; // I-type immediate
-    assign shamt_ID = instruction_ID[24:20]; // Shift amount for shift operations is rs2
-    assign auipc_or_lui_addr_ID = instruction_ID[31:12]; //the rd addr for auipc and lui instr
-    
-    // ========== Control Unit ==========
+    assign shamt_ID = instruction_ID[24:20];
+    assign auipc_or_lui_addr_ID = instruction_ID[31:12];
+
     main_control_unit control_unit (
         .opcode(opcode),
         .funct7(funct7),
@@ -172,7 +138,6 @@ logic [4:0]  reg_write_addr_WB;
         .Lui(Lui_ID)
     );
 
-    // ========== Register File ==========
     regfile_ff #(
         .N(32),
         .W(32)
@@ -188,45 +153,37 @@ logic [4:0]  reg_write_addr_WB;
         .rdata2(reg_read_data2_ID)
     );
 
-    branch_comparator branch_comparator (
-        .reg_data1(reg_read_data1_ID),
-        .reg_data2(reg_read_data2_ID),
-        .branch(Branch),
-        .branch_type(BranchType),
-        .pc_src(pc_src)  //default is 0.      
-    );
+    // Immediate generation for RV32I control-flow and ALU/memory operations
+    logic signed [31:0] imm_i, imm_s, imm_b, imm_j;
+    always_comb begin
+        imm_i = {{20{instruction_ID[31]}}, instruction_ID[31:20]};
+        imm_s = {{20{instruction_ID[31]}}, instruction_ID[31:25], instruction_ID[11:7]};
+        imm_b = {{19{instruction_ID[31]}}, instruction_ID[31], instruction_ID[7], instruction_ID[30:25], instruction_ID[11:8], 1'b0};
+        imm_j = {{11{instruction_ID[31]}}, instruction_ID[31], instruction_ID[19:12], instruction_ID[20], instruction_ID[30:21], 1'b0};
 
-    logic [11:0] store_imm;
-    logic [11:0] imm;
-    logic [11:0] store_mux_inputs [2];  
+        case (opcode)
+            7'b0100011: imm_extended_ID = imm_s; // store
+            7'b1100011: imm_extended_ID = imm_b; // branch
+            7'b1101111: imm_extended_ID = imm_j; // jal
+            default:    imm_extended_ID = imm_i; // I-type/jalr/load
+        endcase
+    end
 
-    assign store_imm = {instruction_ID[31:25], instruction_ID[11:7]};
-    assign store_mux_inputs[0] = imm_12bit;
-    assign store_mux_inputs[1] = store_imm;
-    
-    //========== store_imm Mux
-    mux #(.DATA_WIDTH(12),.NUM_INPUTS(2)) store_imm_mux (
-        .data_in(store_mux_inputs),
-        .sel(Sel_imm), 
-        .data_out(imm)
-    );
-    
-    // ========== Sign Extension ==========
-    sign_extension sign_ext (
-        .imm_in(imm),
-        .imm_out(imm_extended_ID)
-    );
+    // Hazard detection: stall on load->(branch/jalr) dependency
+    assign is_branch_or_jalr_ID = Branch | Jalr_ID;
+    assign control_stall = MemRead_EX && (reg_write_addr_EX != 5'd0) && is_branch_or_jalr_ID &&
+                          (((reg_write_addr_EX == rs1) && (rs1 != 5'd0)) ||
+                           (Branch && (reg_write_addr_EX == rs2) && (rs2 != 5'd0)));
 
+    assign pc_write = ~control_stall;
+    assign if_id_enable = ~control_stall;
 
-
-    ID_EX_reg #(
-        .DATA_WIDTH(32)
-    ) id_ex_reg_inst (
-        // Clock and Reset
+    ID_EX_reg #(.DATA_WIDTH(32)) id_ex_reg_inst (
         .clk(clk),
         .rst_n(reset_n),
-        
-        // Control Signals Input
+        .flush(id_ex_flush),
+        .Branch(Branch),
+        .BranchType(BranchType),
         .MemRead(MemRead_ID),
         .MemtoReg(MemtoReg_ID),
         .ALUOp(ALUOp_ID),
@@ -240,13 +197,17 @@ logic [4:0]  reg_write_addr_WB;
         .auipc(AuiPc_ID),
         .lui(Lui_ID),
         .shamt(shamt_ID),
+        .rs1(rs1),
+        .rs2(rs2),
+        .pc(pc_ID),
         .reg_read_data1(reg_read_data1_ID),
         .reg_read_data2(reg_read_data2_ID),
-        .reg_write_addr(reg_write_addr_ID),
+        .reg_write_addr(rd),
         .imm_extended(imm_extended_ID),
         .auipc_or_lui_addr(auipc_or_lui_addr_ID),
-        
-        // Control Signals Output
+
+        .Branch_out(Branch_EX),
+        .BranchType_out(BranchType_EX),
         .MemRead_out(MemRead_EX),
         .MemtoReg_out(MemtoReg_EX),
         .ALUOp_out(ALUOp_EX),
@@ -260,6 +221,9 @@ logic [4:0]  reg_write_addr_WB;
         .auipc_out(auipc_EX),
         .lui_out(lui_EX),
         .shamt_out(shamt_EX),
+        .rs1_out(rs1_EX),
+        .rs2_out(rs2_EX),
+        .pc_out(pc_EX),
         .reg_read_data1_out(reg_read_data1_EX),
         .reg_read_data2_out(reg_read_data2_EX),
         .reg_write_addr_out(reg_write_addr_EX),
@@ -267,42 +231,65 @@ logic [4:0]  reg_write_addr_WB;
         .auipc_or_lui_addr_out(auipc_or_lui_addr_EX)
     );
 
+    // Forwarding in EX for branch/jump and ALU operands
+    always_comb begin
+        forward_a_EX = reg_read_data1_EX;
+        forward_b_EX = reg_read_data2_EX;
 
+        if (RegWrite_MEM && (reg_write_addr_MEM != 5'd0) && (reg_write_addr_MEM == rs1_EX) && !MemtoReg_MEM)
+            forward_a_EX = reg_write_data_MEM;
+        else if (RegWrite_WB && (reg_write_addr_WB != 5'd0) && (reg_write_addr_WB == rs1_EX))
+            forward_a_EX = reg_write_data;
 
-    
+        if (RegWrite_MEM && (reg_write_addr_MEM != 5'd0) && (reg_write_addr_MEM == rs2_EX) && !MemtoReg_MEM)
+            forward_b_EX = reg_write_data_MEM;
+        else if (RegWrite_WB && (reg_write_addr_WB != 5'd0) && (reg_write_addr_WB == rs2_EX))
+            forward_b_EX = reg_write_data;
+    end
 
-   
+    logic [31:0] mux_inputs [2];
+    assign mux_inputs[0] = forward_b_EX;
+    assign mux_inputs[1] = imm_extended_EX;
 
-   logic [31:0] mux_inputs [2];  
-   assign mux_inputs[0] = reg_read_data2_EX;
-   assign mux_inputs[1] = imm_extended_EX;
+    mux #(.NUM_INPUTS(2)) alu_src_mux2 (
+        .data_in(mux_inputs),
+        .sel(ALUSrc_EX),
+        .data_out(alu_input2)
+    );
 
-   // ========== ALU Input 2 Mux ==========
-   mux #(.NUM_INPUTS(2)) alu_src_mux2 (
-       .data_in(mux_inputs),
-       // .data_in[0](reg_read_data2),      // Register data
-       // .data_in[1](imm_extended),        // Immediate data
-       .sel(ALUSrc_EX),
-       .data_out(alu_input2)
-   );
-
-    // ========== ALU ==========
     alu alu_inst (
-        .alu_in1(reg_read_data1_EX),
+        .alu_in1(forward_a_EX),
         .alu_in2(alu_input2),
         .alu_op_ctrl(ALUOp_EX),
         .shamt(shamt_EX),
-        .alu_out(alu_result_EX)
+        .alu_out(alu_result_raw_EX)
     );
 
+    branch_comparator branch_comparator_ex (
+        .reg_data1(forward_a_EX),
+        .reg_data2(forward_b_EX),
+        .branch(Branch_EX),
+        .branch_type(BranchType_EX),
+        .pc_src(branch_taken_EX)
+    );
 
-    EX_MEM_reg #(
-        .DATA_WIDTH(32)
-    ) ex_mem_reg_inst (
+    assign alu_result_EX = Jal_EX ? (pc_EX + 32'd4) : alu_result_raw_EX;
+
+    always_comb begin
+        branch_jump_target_EX = pc_EX + imm_extended_EX;
+        if (Jalr_EX)
+            branch_jump_target_EX = (forward_a_EX + imm_extended_EX) & 32'hFFFFFFFE;
+    end
+
+    assign control_redirect_EX = branch_taken_EX | Jal_EX;
+    assign if_id_flush = control_redirect_EX;
+    assign id_ex_flush = control_stall | control_redirect_EX;
+
+    EX_MEM_reg #(.DATA_WIDTH(32)) ex_mem_reg_inst (
         .clk(clk),
         .rst_n(reset_n),
         .alu_result(alu_result_EX),
-        .reg_read_data2(reg_read_data2_EX),
+        .reg_read_data2(forward_b_EX),
         .reg_write_addr(reg_write_addr_EX),
         .MemtoReg(MemtoReg_EX),
         .MemWrite(MemWrite_EX),
@@ -313,7 +300,7 @@ logic [4:0]  reg_write_addr_WB;
         .auipc(auipc_EX),
         .lui(lui_EX),
         .auipc_or_lui_addr(auipc_or_lui_addr_EX),
-        
+
         .MemtoReg_out(MemtoReg_MEM),
         .MemWrite_out(MemWrite_MEM),
         .RegWrite_out(RegWrite_MEM),
@@ -328,17 +315,12 @@ logic [4:0]  reg_write_addr_WB;
         .auipc_or_lui_addr_out(auipc_or_lui_addr_MEM)
     );
 
-
-
-    // ========== Shifter for data memory store ======
-
     logic [3:0] MemStoreSize;
     write_control_shifter write_control_shifter_inst (
         .alu_result(alu_result_MEM[1:0]),
         .MemWrite(MemWrite_MEM),
         .MemStoreSize(MemStoreSize)
     );
-
 
     logic [31:0] mem_write_data_out;
     write_data_shifter write_data_shifter_inst(
@@ -347,22 +329,51 @@ logic [4:0]  reg_write_addr_WB;
         .mem_write_data_out(mem_write_data_out)
     );
 
-    // ========== Data Memory ==========
     data_memory #(
-        .ADDR_WIDTH(10),  // 1024 words of data memory
+        .ADDR_WIDTH(10),
         .DATA_WIDTH(32)
     ) data_mem (
         .clk(clk),
         .we(MemStoreSize),
-        .addr((alu_result_MEM[11:2])),        // Word-aligned access
-        .write_data(mem_write_data_out),    // Data from rs2 << (alu_out[1:0] * 8)
+        .addr((alu_result_MEM[11:2])),
+        .write_data(mem_write_data_out),
         .read_data(mem_read_data_MEM)
     );
 
+    // rd calculations in MEM stage
+    logic [31:0] jal_rd_mux_inputs [2];
+    logic [31:0] jal_rd_mux_out;
+    assign jal_rd_mux_inputs[0] = alu_result_MEM;
+    assign jal_rd_mux_inputs[1] = alu_result_MEM; // jal/jalr already forced to pc+4 in EX
 
-    MEM_WB_reg #(
-        .DATA_WIDTH(32)
-    ) mem_wb_reg_inst (
+    mux #(.NUM_INPUTS(2)) jal_rd_mux (
+        .data_in(jal_rd_mux_inputs),
+        .sel(Jal_MEM),
+        .data_out(jal_rd_mux_out)
+    );
+
+    logic [31:0] auipc_rd_mux_inputs [2];
+    logic [31:0] auipc_rd_mux_out;
+    assign auipc_rd_mux_inputs[0] = jal_rd_mux_out;
+    assign auipc_rd_mux_inputs[1] = pc_current + {auipc_or_lui_addr_MEM, {12{1'b0}}};
+
+    mux #(.NUM_INPUTS(2)) auipc_rd_mux (
+        .data_in(auipc_rd_mux_inputs),
+        .sel(auipc_MEM),
+        .data_out(auipc_rd_mux_out)
+    );
+
+    logic [31:0] lui_rd_mux_inputs [2];
+    assign lui_rd_mux_inputs[0] = auipc_rd_mux_out;
+    assign lui_rd_mux_inputs[1] = {auipc_or_lui_addr_MEM, {12{1'b0}}};
+
+    mux #(.NUM_INPUTS(2)) lui_rd_mux (
+        .data_in(lui_rd_mux_inputs),
+        .sel(lui_MEM),
+        .data_out(reg_write_data_MEM)
+    );
+
+    MEM_WB_reg #(.DATA_WIDTH(32)) mem_wb_reg_inst (
         .clk(clk),
         .rst_n(reset_n),
         .alu_result(alu_result_MEM),
@@ -373,7 +384,7 @@ logic [4:0]  reg_write_addr_WB;
         .RegWrite(RegWrite_MEM),
         .MemReadSigned(MemReadSigned_MEM),
         .MemReadSize(MemReadSize_MEM),
-        
+
         .MemtoReg_out(MemtoReg_WB),
         .RegWrite_out(RegWrite_WB),
         .MemReadSigned_out(MemReadSigned_WB),
@@ -384,10 +395,7 @@ logic [4:0]  reg_write_addr_WB;
         .reg_write_addr_out(reg_write_addr_WB)
     );
 
-    logic [7:0] Byte;
     logic [15:0] halfword;
-    logic [32:0] word;
-
     data_indexer data_indexer_inst (
         .MemReadSize(MemReadSize_WB),
         .offset(alu_result_WB[1:0]),
@@ -396,153 +404,46 @@ logic [4:0]  reg_write_addr_WB;
     );
 
     logic [31:0] byte_extended;
-    extender #(.INPUT_WIDTH(8)) 
-    byte_extender (
+    extender #(.INPUT_WIDTH(8)) byte_extender (
         .in(halfword[7:0]),
         .sign(MemReadSigned_WB),
         .out(byte_extended)
     );
 
     logic [31:0] halfword_extended;
-    extender #(.INPUT_WIDTH(16)) 
-    halfword_extender (
+    extender #(.INPUT_WIDTH(16)) halfword_extender (
         .in(halfword),
         .sign(MemReadSigned_WB),
         .out(halfword_extended)
     );
 
-    logic [31:0] mux_inputs4 [3]; 
-    logic [31:0] mem_to_reg; 
+    logic [31:0] mux_inputs4 [3];
+    logic [31:0] mem_to_reg;
     assign mux_inputs4[0] = byte_extended;
     assign mux_inputs4[1] = halfword_extended;
     assign mux_inputs4[2] = mem_read_data_WB;
 
-    // ========== extended Mux ==========
     mux #(.NUM_INPUTS(3)) extended_mux (
         .data_in (mux_inputs4),
         .sel(MemReadSize_WB),
         .data_out(mem_to_reg)
     );
 
-
-
-
-    //===============rd calculations in EX stage===========
-    logic [31:0] jal_rd_mux_inputs [2];
-    logic [31:0] jal_rd_mux_out;
-
-    assign jal_rd_mux_inputs[0] = alu_result_MEM;
-    assign jal_rd_mux_inputs[1] = pc_plus_4; //*******THIS NEEDS TO BE PIPELINED*********
-
-    // Mux to output either pc_plus_4 or alu_result depending on if we're using a jal instr. or not
-    mux #(.NUM_INPUTS(2)) jal_rd_mux (
-        .data_in(jal_rd_mux_inputs),
-        .sel(Jal_MEM),
-        .data_out(jal_rd_mux_out)
-    );
-
-    logic [31:0] auipc_rd_mux_inputs [2];
-    logic [31:0] auipc_rd_mux_out;
-    assign auipc_rd_mux_inputs[0] = jal_rd_mux_out;
-    assign auipc_rd_mux_inputs[1] = pc_current + {auipc_or_lui_addr_MEM, {12{1'b0}}}; //THIS instruction_ID signal NEEDS TO BE ADDED TO THE PIPE REGS
-
-
-    // Mux to output either auipc, lui, or alu data
-    mux #(.NUM_INPUTS(2)) auipc_rd_mux (
-        .data_in(auipc_rd_mux_inputs),
-        .sel(auipc_MEM),
-        .data_out(auipc_rd_mux_out)
-    );
-
-    logic [31:0] lui_rd_mux_inputs [2];
-    logic [31:0] lui_rd_mux_out;
-    assign lui_rd_mux_inputs[0] = auipc_rd_mux_out;
-    assign lui_rd_mux_inputs[1] = {auipc_or_lui_addr_MEM, {12{1'b0}}}; //THIS instruction_ID signal NEEDS TO BE ADDED TO THE PIPE REGS
-
-    // Mux to output either jal data (or alu data) or PC + (imm << 12) based on AuiPc
-    mux #(.NUM_INPUTS(2)) lui_rd_mux (
-        .data_in(lui_rd_mux_inputs),
-        .sel(lui_MEM),
-        .data_out(reg_write_data_MEM)
-    );
-
-
-
-    //========== Write-back Mux ==========
-    logic [31:0] mux_inputs2 [2];  
+    logic [31:0] mux_inputs2 [2];
     assign mux_inputs2[0] = reg_write_data_WB;
     assign mux_inputs2[1] = mem_to_reg;
 
     mux #(.NUM_INPUTS(2)) mem_to_reg_mux (
         .data_in (mux_inputs2),
-        // .in0(alu_result),          // ALU result
-        // .in1(mem_read_data),       // Memory data
         .sel(MemtoReg_WB),
         .data_out(reg_write_data)
     );
 
-
-
-
-    // ========== Branch Control ==========
-    logic [31:0] branch_target;
-    logic [31:0] branch_extended;
-    logic [11:0] branch_imm;
-
-    assign branch_imm = {instruction_ID[31], instruction_ID[7], instruction_ID[30:25], instruction_ID[11:8]};		   //should the branhc imm use the output of the IF_ID pipe reg or the input?
-	//assign branch_imm = {instruction[31], instruction[30-25], instruction[11-8], instruction[7]};
-    
-    extender #(.INPUT_WIDTH(12)) 
-        branch_imm_extender (
-            .in(branch_imm),
-            .sign(BranchSigned),
-            .out(branch_extended)
-        );
-
-    // Branch target address calculation
-    adder #(.WIDTH(32)) branch_adder (  //here, we trust the user doesnt give us a value that is beyond the range of PC.
-        .in0(pc_current),
-        .in1(branch_extended<<1),      
-        .sum(branch_target)
-    );
-
-    logic [31:0] branch_mux_inputs [2];  
-    logic [31:0] not_jal_imm;
-    assign branch_mux_inputs[0] = pc_plus_4;
-    assign branch_mux_inputs[1] = branch_target;
-
-    // ========== Branch Mux ==========
-    mux #(.NUM_INPUTS(2)) branch_mux (
-        .data_in (branch_mux_inputs),
-        .sel(pc_src),
-        .data_out(not_jal_imm)
-    );
-    
-    logic [31:0] jalr_mux_inputs [2];
-    logic [31:0] jalr_mux_out;
-    //jal instruction, encoded in offset of 2 bytes
-    assign jalr_mux_inputs[0] = {{11{instruction_ID[31]}}, instruction_ID[31], instruction_ID[19:12], instruction_ID[20], instruction_ID[30:21], 1'b0} + pc_current;
-    //jalr instruction
-    assign jalr_mux_inputs[1] = alu_result & ~32'b1; //ratified specs tells us to set least significant bit of addition to 0
-
-    // ========== JALR Mux ==========
-    mux #(.NUM_INPUTS(2)) jalr_mux (
-        .data_in (jalr_mux_inputs),
-        .sel(Jalr_ID),
-        .data_out(jalr_mux_out)
-    );
-
-    logic [31:0] jal_mux_inputs [2];
-
-    assign jal_mux_inputs[0] = not_jal_imm;
-    assign jal_mux_inputs[1] = jalr_mux_out;
-
-    // ========== JAL/PC Next Mux ==========
-    mux #(.NUM_INPUTS(2)) jal_mux (
-        .data_in (jal_mux_inputs),
-        .sel(Jal_ID),
-        .data_out(pc_next)
-    );
-
+    // PC update: predict not taken, redirect on taken branch/jump in EX
+    always_comb begin
+        pc_next = pc_plus_4;
+        if (control_redirect_EX)
+            pc_next = branch_jump_target_EX;
+    end
 
 endmodule
