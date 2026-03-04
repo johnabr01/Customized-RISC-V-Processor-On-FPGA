@@ -65,7 +65,9 @@ module riscv_processor (
     logic [4:0] reg_write_addr_WB;
 
     // Hazard detection helpers
-    logic is_branch_or_jalr_ID;
+    logic uses_rs1_ID;
+    logic uses_rs2_ID;
+    logic load_use_hazard;
     logic control_stall;
 
     // ========== Program Counter ==========
@@ -169,12 +171,25 @@ module riscv_processor (
         endcase
     end
 
-    // Hazard detection: stall on load->(branch/jalr) dependency
-    assign is_branch_or_jalr_ID = Branch | Jalr_ID;
-    assign control_stall = MemRead_EX && (reg_write_addr_EX != 5'd0) && is_branch_or_jalr_ID &&
-                          (((reg_write_addr_EX == rs1) && (rs1 != 5'd0)) ||
-                           (Branch && (reg_write_addr_EX == rs2) && (rs2 != 5'd0)));
+    // Hazard detection: stall on generic load-use dependency
+    always_comb begin
+        // Most instructions use rs1 except LUI/JAL/AUIPC and empty bubbles.
+        uses_rs1_ID = ~(opcode == 7'b0110111 || // LUI
+                        opcode == 7'b1101111 || // JAL
+                        opcode == 7'b0010111 || // AUIPC
+                        opcode == 7'b0000000);  // bubble/NOP from flush
 
+        // Only R/S/B formats consume rs2 as source.
+        uses_rs2_ID = (opcode == 7'b0110011 ||  // R-type
+                       opcode == 7'b0100011 ||  // Store
+                       opcode == 7'b1100011);   // Branch
+    end
+
+    assign load_use_hazard = MemRead_EX && (reg_write_addr_EX != 5'd0) &&
+                             ((uses_rs1_ID && (reg_write_addr_EX == rs1)) ||
+                              (uses_rs2_ID && (reg_write_addr_EX == rs2)));
+
+    assign control_stall = load_use_hazard;
     assign pc_write = ~control_stall;
     assign if_id_enable = ~control_stall;
 
