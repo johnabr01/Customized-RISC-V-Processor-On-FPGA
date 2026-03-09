@@ -44,7 +44,7 @@ module riscv_processor (
     logic [19:0] auipc_or_lui_addr_EX;
     alu_op_pkg::alu_op_t ALUOp_EX;
 
-    logic [31:0] forward_a_EX, forward_b_EX;
+    logic [31:0] rs1_fwd_ID, rs2_fwd_ID;
     logic [31:0] alu_input2, alu_result_raw_EX, alu_result_EX;
     logic [31:0] branch_jump_target_EX;
     logic branch_taken_EX, control_redirect_EX;
@@ -67,7 +67,8 @@ module riscv_processor (
     // Hazard detection helpers
     logic uses_rs1_ID;
     logic uses_rs2_ID;
-    logic load_use_hazard;
+    logic load_use_hazard_ex;
+    logic load_use_hazard_mem;
     logic control_stall;
 
     // ========== Program Counter ==========
@@ -155,6 +156,27 @@ module riscv_processor (
         .rdata2(reg_read_data2_ID)
     );
 
+    // Decode-stage forwarding to build source operands before ID/EX latch
+    always_comb begin
+        rs1_fwd_ID = reg_read_data1_ID;
+        rs2_fwd_ID = reg_read_data2_ID;
+
+        // Forward from EX stage ALU-producing instruction
+        if (RegWrite_EX && (reg_write_addr_EX != 5'd0) && !MemtoReg_EX && (reg_write_addr_EX == rs1))
+            rs1_fwd_ID = alu_result_EX;
+        else if (RegWrite_MEM && (reg_write_addr_MEM != 5'd0) && !MemtoReg_MEM && (reg_write_addr_MEM == rs1))
+            rs1_fwd_ID = reg_write_data_MEM;
+        else if (RegWrite_WB && (reg_write_addr_WB != 5'd0) && (reg_write_addr_WB == rs1))
+            rs1_fwd_ID = reg_write_data;
+
+        if (RegWrite_EX && (reg_write_addr_EX != 5'd0) && !MemtoReg_EX && (reg_write_addr_EX == rs2))
+            rs2_fwd_ID = alu_result_EX;
+        else if (RegWrite_MEM && (reg_write_addr_MEM != 5'd0) && !MemtoReg_MEM && (reg_write_addr_MEM == rs2))
+            rs2_fwd_ID = reg_write_data_MEM;
+        else if (RegWrite_WB && (reg_write_addr_WB != 5'd0) && (reg_write_addr_WB == rs2))
+            rs2_fwd_ID = reg_write_data;
+    end
+
     // Immediate generation for RV32I control-flow and ALU/memory operations
     logic signed [31:0] imm_i, imm_s, imm_b, imm_j;
     always_comb begin
@@ -185,11 +207,17 @@ module riscv_processor (
                        opcode == 7'b1100011);   // Branch
     end
 
-    assign load_use_hazard = MemRead_EX && (reg_write_addr_EX != 5'd0) &&
-                             ((uses_rs1_ID && (reg_write_addr_EX == rs1)) ||
-                              (uses_rs2_ID && (reg_write_addr_EX == rs2)));
+    assign load_use_hazard_ex = MemRead_EX && (reg_write_addr_EX != 5'd0) &&
+                                ((uses_rs1_ID && (reg_write_addr_EX == rs1)) ||
+                                 (uses_rs2_ID && (reg_write_addr_EX == rs2)));
 
-    assign control_stall = load_use_hazard;
+    // With forwarding moved to decode, a load result still cannot be forwarded from MEM in time,
+    // so hold one additional cycle when a dependent instruction is in ID and load is in MEM.
+    assign load_use_hazard_mem = MemtoReg_MEM && (reg_write_addr_MEM != 5'd0) &&
+                                 ((uses_rs1_ID && (reg_write_addr_MEM == rs1)) ||
+                                  (uses_rs2_ID && (reg_write_addr_MEM == rs2)));
+
+    assign control_stall = load_use_hazard_ex | load_use_hazard_mem;
     assign pc_write = ~control_stall;
     assign if_id_enable = ~control_stall;
 
@@ -215,8 +243,8 @@ module riscv_processor (
         .rs1(rs1),
         .rs2(rs2),
         .pc(pc_ID),
-        .reg_read_data1(reg_read_data1_ID),
-        .reg_read_data2(reg_read_data2_ID),
+        .reg_read_data1(rs1_fwd_ID),
+        .reg_read_data2(rs2_fwd_ID),
         .reg_write_addr(rd),
         .imm_extended(imm_extended_ID),
         .auipc_or_lui_addr(auipc_or_lui_addr_ID),
@@ -246,24 +274,8 @@ module riscv_processor (
         .auipc_or_lui_addr_out(auipc_or_lui_addr_EX)
     );
 
-    // Forwarding in EX for branch/jump and ALU operands
-    always_comb begin
-        forward_a_EX = reg_read_data1_EX;
-        forward_b_EX = reg_read_data2_EX;
-
-        if (RegWrite_MEM && (reg_write_addr_MEM != 5'd0) && (reg_write_addr_MEM == rs1_EX) && !MemtoReg_MEM)
-            forward_a_EX = reg_write_data_MEM;
-        else if (RegWrite_WB && (reg_write_addr_WB != 5'd0) && (reg_write_addr_WB == rs1_EX))
-            forward_a_EX = reg_write_data;
-
-        if (RegWrite_MEM && (reg_write_addr_MEM != 5'd0) && (reg_write_addr_MEM == rs2_EX) && !MemtoReg_MEM)
-            forward_b_EX = reg_write_data_MEM;
-        else if (RegWrite_WB && (reg_write_addr_WB != 5'd0) && (reg_write_addr_WB == rs2_EX))
-            forward_b_EX = reg_write_data;
-    end
-
     logic [31:0] mux_inputs [2];
-    assign mux_inputs[0] = forward_b_EX;
+    assign mux_inputs[0] = reg_read_data2_EX;
     assign mux_inputs[1] = imm_extended_EX;
 
     mux #(.NUM_INPUTS(2)) alu_src_mux2 (
@@ -273,7 +285,7 @@ module riscv_processor (
     );
 
     alu alu_inst (
-        .alu_in1(forward_a_EX),
+        .alu_in1(reg_read_data1_EX),
         .alu_in2(alu_input2),
         .alu_op_ctrl(ALUOp_EX),
         .shamt(shamt_EX),
@@ -281,8 +293,8 @@ module riscv_processor (
     );
 
     branch_comparator branch_comparator_ex (
-        .reg_data1(forward_a_EX),
-        .reg_data2(forward_b_EX),
+        .reg_data1(reg_read_data1_EX),
+        .reg_data2(reg_read_data2_EX),
         .branch(Branch_EX),
         .branch_type(BranchType_EX),
         .pc_src(branch_taken_EX)
@@ -293,7 +305,7 @@ module riscv_processor (
     always_comb begin
         branch_jump_target_EX = pc_EX + imm_extended_EX;
         if (Jalr_EX)
-            branch_jump_target_EX = (forward_a_EX + imm_extended_EX) & 32'hFFFFFFFE;
+            branch_jump_target_EX = (reg_read_data1_EX + imm_extended_EX) & 32'hFFFFFFFE;
     end
 
     assign control_redirect_EX = branch_taken_EX | Jal_EX;
@@ -304,7 +316,7 @@ module riscv_processor (
         .clk(clk),
         .rst_n(reset_n),
         .alu_result(alu_result_EX),
-        .reg_read_data2(forward_b_EX),
+        .reg_read_data2(reg_read_data2_EX),
         .reg_write_addr(reg_write_addr_EX),
         .MemtoReg(MemtoReg_EX),
         .MemWrite(MemWrite_EX),
