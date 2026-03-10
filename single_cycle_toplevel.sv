@@ -55,6 +55,7 @@ module riscv_processor (
     logic [1:0] MemReadSize_MEM;
     logic [3:0] MemWrite_MEM;
     logic [31:0] alu_result_MEM, reg_read_data2_MEM, mem_read_data_MEM, reg_write_data_MEM;
+    logic [31:0] mem_to_reg_MEM;
     logic [4:0] reg_write_addr_MEM;
     logic [19:0] auipc_or_lui_addr_MEM;
 
@@ -68,7 +69,6 @@ module riscv_processor (
     logic uses_rs1_ID;
     logic uses_rs2_ID;
     logic load_use_hazard_ex;
-    logic load_use_hazard_mem;
     logic control_stall;
 
     // ========== Program Counter ==========
@@ -166,6 +166,8 @@ module riscv_processor (
             rs1_fwd_ID = alu_result_EX;
         else if (RegWrite_MEM && (reg_write_addr_MEM != 5'd0) && !MemtoReg_MEM && (reg_write_addr_MEM == rs1))
             rs1_fwd_ID = reg_write_data_MEM;
+        else if (MemtoReg_MEM && (reg_write_addr_MEM != 5'd0) && (reg_write_addr_MEM == rs1))
+            rs1_fwd_ID = mem_to_reg_MEM;
         else if (RegWrite_WB && (reg_write_addr_WB != 5'd0) && (reg_write_addr_WB == rs1))
             rs1_fwd_ID = reg_write_data;
 
@@ -173,6 +175,8 @@ module riscv_processor (
             rs2_fwd_ID = alu_result_EX;
         else if (RegWrite_MEM && (reg_write_addr_MEM != 5'd0) && !MemtoReg_MEM && (reg_write_addr_MEM == rs2))
             rs2_fwd_ID = reg_write_data_MEM;
+        else if (MemtoReg_MEM && (reg_write_addr_MEM != 5'd0) && (reg_write_addr_MEM == rs2))
+            rs2_fwd_ID = mem_to_reg_MEM;
         else if (RegWrite_WB && (reg_write_addr_WB != 5'd0) && (reg_write_addr_WB == rs2))
             rs2_fwd_ID = reg_write_data;
     end
@@ -211,13 +215,7 @@ module riscv_processor (
                                 ((uses_rs1_ID && (reg_write_addr_EX == rs1)) ||
                                  (uses_rs2_ID && (reg_write_addr_EX == rs2)));
 
-    // With forwarding moved to decode, a load result still cannot be forwarded from MEM in time,
-    // so hold one additional cycle when a dependent instruction is in ID and load is in MEM.
-    assign load_use_hazard_mem = MemtoReg_MEM && (reg_write_addr_MEM != 5'd0) &&
-                                 ((uses_rs1_ID && (reg_write_addr_MEM == rs1)) ||
-                                  (uses_rs2_ID && (reg_write_addr_MEM == rs2)));
-
-    assign control_stall = load_use_hazard_ex | load_use_hazard_mem;
+    assign control_stall = load_use_hazard_ex;
     assign pc_write = ~control_stall;
     assign if_id_enable = ~control_stall;
 
@@ -367,6 +365,41 @@ module riscv_processor (
         .read_data(mem_read_data_MEM)
     );
 
+    // MEM-stage load formatting (byte/halfword selection + sign/zero extension)
+    logic [15:0] halfword_MEM;
+    logic [31:0] byte_extended_MEM;
+    logic [31:0] halfword_extended_MEM;
+    logic [31:0] load_mux_inputs_MEM [3];
+
+    data_indexer data_indexer_mem (
+        .MemReadSize(MemReadSize_MEM),
+        .offset(alu_result_MEM[1:0]),
+        .mem_read_data(mem_read_data_MEM),
+        .indexed_data(halfword_MEM)
+    );
+
+    extender #(.INPUT_WIDTH(8)) byte_extender_mem (
+        .in(halfword_MEM[7:0]),
+        .sign(MemReadSigned_MEM),
+        .out(byte_extended_MEM)
+    );
+
+    extender #(.INPUT_WIDTH(16)) halfword_extender_mem (
+        .in(halfword_MEM),
+        .sign(MemReadSigned_MEM),
+        .out(halfword_extended_MEM)
+    );
+
+    assign load_mux_inputs_MEM[0] = byte_extended_MEM;
+    assign load_mux_inputs_MEM[1] = halfword_extended_MEM;
+    assign load_mux_inputs_MEM[2] = mem_read_data_MEM;
+
+    mux #(.NUM_INPUTS(3)) load_format_mem_mux (
+        .data_in(load_mux_inputs_MEM),
+        .sel(MemReadSize_MEM),
+        .data_out(mem_to_reg_MEM)
+    );
+
     // rd calculations in MEM stage
     logic [31:0] jal_rd_mux_inputs [2];
     logic [31:0] jal_rd_mux_out;
@@ -404,7 +437,7 @@ module riscv_processor (
         .clk(clk),
         .rst_n(reset_n),
         .alu_result(alu_result_MEM),
-        .mem_read_data(mem_read_data_MEM),
+        .mem_read_data(mem_to_reg_MEM),
         .reg_write_data(reg_write_data_MEM),
         .reg_write_addr(reg_write_addr_MEM),
         .MemtoReg(MemtoReg_MEM),
@@ -422,43 +455,9 @@ module riscv_processor (
         .reg_write_addr_out(reg_write_addr_WB)
     );
 
-    logic [15:0] halfword;
-    data_indexer data_indexer_inst (
-        .MemReadSize(MemReadSize_WB),
-        .offset(alu_result_WB[1:0]),
-        .mem_read_data(mem_read_data_WB),
-        .indexed_data(halfword)
-    );
-
-    logic [31:0] byte_extended;
-    extender #(.INPUT_WIDTH(8)) byte_extender (
-        .in(halfword[7:0]),
-        .sign(MemReadSigned_WB),
-        .out(byte_extended)
-    );
-
-    logic [31:0] halfword_extended;
-    extender #(.INPUT_WIDTH(16)) halfword_extender (
-        .in(halfword),
-        .sign(MemReadSigned_WB),
-        .out(halfword_extended)
-    );
-
-    logic [31:0] mux_inputs4 [3];
-    logic [31:0] mem_to_reg;
-    assign mux_inputs4[0] = byte_extended;
-    assign mux_inputs4[1] = halfword_extended;
-    assign mux_inputs4[2] = mem_read_data_WB;
-
-    mux #(.NUM_INPUTS(3)) extended_mux (
-        .data_in (mux_inputs4),
-        .sel(MemReadSize_WB),
-        .data_out(mem_to_reg)
-    );
-
     logic [31:0] mux_inputs2 [2];
     assign mux_inputs2[0] = reg_write_data_WB;
-    assign mux_inputs2[1] = mem_to_reg;
+    assign mux_inputs2[1] = mem_read_data_WB;
 
     mux #(.NUM_INPUTS(2)) mem_to_reg_mux (
         .data_in (mux_inputs2),
