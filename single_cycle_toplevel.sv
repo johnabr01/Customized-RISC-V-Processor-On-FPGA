@@ -46,8 +46,8 @@ module riscv_processor (
 
     logic [31:0] rs1_fwd_ID, rs2_fwd_ID;
     logic [31:0] alu_input2, alu_result_raw_EX, alu_result_EX;
-    logic [31:0] branch_jump_target_EX;
-    logic branch_taken_EX, control_redirect_EX;
+    logic [31:0] branch_jump_target_ID;
+    logic branch_taken_ID, control_redirect_ID;
     logic id_ex_flush;
 
     // ========================= MEM stage =========================
@@ -219,6 +219,23 @@ module riscv_processor (
     assign pc_write = ~control_stall;
     assign if_id_enable = ~control_stall;
 
+    // Resolve control flow in decode stage to reduce taken-branch penalty
+    branch_comparator branch_comparator_id (
+        .reg_data1(rs1_fwd_ID),
+        .reg_data2(rs2_fwd_ID),
+        .branch(Branch),
+        .branch_type(BranchType),
+        .pc_src(branch_taken_ID)
+    );
+
+    always_comb begin
+        branch_jump_target_ID = pc_ID + imm_extended_ID;
+        if (Jalr_ID)
+            branch_jump_target_ID = (rs1_fwd_ID + imm_extended_ID) & 32'hFFFFFFFE;
+    end
+
+    assign control_redirect_ID = branch_taken_ID | Jal_ID;
+
     ID_EX_reg #(.DATA_WIDTH(32)) id_ex_reg_inst (
         .clk(clk),
         .rst_n(reset_n),
@@ -290,25 +307,10 @@ module riscv_processor (
         .alu_out(alu_result_raw_EX)
     );
 
-    branch_comparator branch_comparator_ex (
-        .reg_data1(reg_read_data1_EX),
-        .reg_data2(reg_read_data2_EX),
-        .branch(Branch_EX),
-        .branch_type(BranchType_EX),
-        .pc_src(branch_taken_EX)
-    );
-
     assign alu_result_EX = Jal_EX ? (pc_EX + 32'd4) : alu_result_raw_EX;
 
-    always_comb begin
-        branch_jump_target_EX = pc_EX + imm_extended_EX;
-        if (Jalr_EX)
-            branch_jump_target_EX = (reg_read_data1_EX + imm_extended_EX) & 32'hFFFFFFFE;
-    end
-
-    assign control_redirect_EX = branch_taken_EX | Jal_EX;
-    assign if_id_flush = control_redirect_EX;
-    assign id_ex_flush = control_stall | control_redirect_EX;
+    assign if_id_flush = control_redirect_ID;
+    assign id_ex_flush = control_stall | control_redirect_ID;
 
     EX_MEM_reg #(.DATA_WIDTH(32)) ex_mem_reg_inst (
         .clk(clk),
@@ -465,11 +467,11 @@ module riscv_processor (
         .data_out(reg_write_data)
     );
 
-    // PC update: predict not taken, redirect on taken branch/jump in EX
+    // PC update: predict not taken, redirect on taken branch/jump in ID
     always_comb begin
         pc_next = pc_plus_4;
-        if (control_redirect_EX)
-            pc_next = branch_jump_target_EX;
+        if (control_redirect_ID)
+            pc_next = branch_jump_target_ID;
     end
 
 endmodule
